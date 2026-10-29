@@ -15,6 +15,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.RelativeLayout;
+import android.widget.Toast;
 
 import org.libsdl.app.SDLActivity;
 
@@ -31,7 +32,11 @@ import java.io.File;
 public class GameActivity extends SDLActivity {
     public static final String EXTRA_ARGS = "args";
 
+    /** Soleanna Hub: Intent extra that closes the game (the hub menu's Quit). */
+    public static final String EXTRA_QUIT = "quit";
+
     private static final int PANEL_FINGERS = 4;
+    private static final int HUB_MENU_FINGERS = 3;
     private static final long PANEL_TAP_WINDOW_MS = 400;
 
     private TouchControlsView controls;
@@ -47,6 +52,18 @@ public class GameActivity extends SDLActivity {
 
     /** Frames the game has presented so far (for the FPS counter). */
     private static native long nativeGetPresentCount();
+
+    /** Soleanna Hub (os/android/hub_android.cpp): lets the game call hubOpenSlot. */
+    private static native void nativeHubInit();
+
+    /** The window is going away: the swap chain must be rebuilt for the next one. */
+    private static native void nativeWindowLost();
+
+    private static GameActivity sRunning;
+    private long lastResume;
+    private long lastSlotMessage;
+    private long lastHubMenu;
+    private boolean hubMenuGesture;
 
     static long presentCount() {
         return nativeGetPresentCount();
@@ -67,14 +84,20 @@ public class GameActivity extends SDLActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        passPaths();
         passDriverChoice();
         super.onCreate(savedInstanceState);
+        sRunning = this;
+        try {
+            nativeHubInit();
+        } catch (UnsatisfiedLinkError ignored) {
+        }
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         settings = ControlsSettings.load(this);
         // The installer is driven by touch, so the controls only appear once the game is installed.
         String[] args = getArguments();
-        boolean installer = !new File(LauncherActivity.ROOT, "game/default.xex").isFile()
+        boolean installer = !Paths.gameInstalled()
                 || (args.length > 0 && args[0].equals("--install-dlc"));
         // The game gets the touch controller whenever the overlay exists, so it can be switched
         // on from the four-finger panel; while hidden it simply sends nothing.
@@ -87,6 +110,17 @@ public class GameActivity extends SDLActivity {
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }
         setFpsCounterVisible(settings.showFps);
+    }
+
+    /** Where the game keeps its files (os/android/android_paths.h), read when the library loads. */
+    private void passPaths() {
+        try {
+            Os.setenv("MARATHON_ANDROID_ROOT", Paths.ROOT.getAbsolutePath(), true);
+            Os.setenv("MARATHON_GAME_PARENT", Paths.gameParent().getAbsolutePath(), true);
+            Os.setenv("MARATHON_USER_DIR", Paths.USER.getAbsolutePath(), true);
+            Os.setenv("MARATHON_LOG_DIR", Paths.LOGS.getAbsolutePath(), true);
+        } catch (ErrnoException ignored) {
+        }
     }
 
     /**
@@ -125,7 +159,17 @@ public class GameActivity extends SDLActivity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        lastResume = System.currentTimeMillis();
+    }
+
+    @Override
     protected void onPause() {
+        try {
+            nativeWindowLost();
+        } catch (UnsatisfiedLinkError ignored) {
+        }
         super.onPause();
         if (controls != null)
             controls.releaseAll();
@@ -133,7 +177,16 @@ public class GameActivity extends SDLActivity {
     }
 
     @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        if (intent.getBooleanExtra(EXTRA_QUIT, false))
+            quitGame();
+    }
+
+    @Override
     protected void onDestroy() {
+        if (sRunning == this)
+            sRunning = null;
         if (panel != null)
             panel.dismiss();
         if (exitDialog != null)
@@ -186,6 +239,10 @@ public class GameActivity extends SDLActivity {
     private void onBackRequested() {
         if (exiting)
             return;
+        if (BuildConfig.HUB && (panel == null || !panel.isShowing())) {
+            openHubMenu("Back");
+            return;
+        }
         if (panel != null && panel.isShowing()) {
             panel.dismiss();
         } else if (exitDialog != null && exitDialog.isShowing()) {
@@ -196,6 +253,65 @@ public class GameActivity extends SDLActivity {
         }
     }
 
+    // ------------------------------------------------------------------ Soleanna Hub
+
+    /**
+     * Called by the game thread (hub_android.cpp) when Sonic enters a gate or accepts a mission.
+     * Opens the app chosen for that slot; Sonic stays in town, so coming back lands at that spot.
+     */
+    public static int hubOpenSlot(String key) {
+        GameActivity activity = sRunning;
+        if (activity == null)
+            return 0;
+        activity.runOnUiThread(() -> activity.openSlot(key));
+        return 1;
+    }
+
+    private void openSlot(String key) {
+        long now = System.currentTimeMillis();
+        // Sonic is still standing in the gate when the hub comes back: don't send him straight off again.
+        if (now - lastResume < 2500) {
+            Hub.log("Slot " + key + " ignored right after coming back");
+            return;
+        }
+        if (Hub.launch(this, key))
+            return;
+        if (now - lastSlotMessage < 2500)
+            return;
+        lastSlotMessage = now;
+        Hub.Slot slot = Hub.slot(key);
+        String name = slot != null ? slot.name : key;
+        Hub.log("Slot " + key + " has no app");
+        Toast.makeText(this, "No game on the " + name + " yet. Press Back, then Slots to pick one.",
+                Toast.LENGTH_LONG).show();
+    }
+
+    /** The hub menu (Back to Soleanna / Slots / Settings / Quit) over the game, which keeps its place. */
+    private void openHubMenu(String why) {
+        long now = System.currentTimeMillis();
+        if (now - lastHubMenu < 700 || isFinishing() || exiting)
+            return;
+        lastHubMenu = now;
+        if (controls != null)
+            controls.releaseAll();
+        Hub.log("Menu opened (" + why + ")");
+        Intent menu = new Intent(this, HubActivity.class);
+        menu.putExtra(HubActivity.EXTRA_FROM_GAME, true);
+        startActivity(menu);
+    }
+
+    /** The hub menu's Quit: save settings and end the game process. */
+    private void quitGame() {
+        if (exiting)
+            return;
+        exiting = true;
+        if (controls != null)
+            controls.releaseAll();
+        TouchControlsView.stopRumble();
+        finish();
+        requestExit(0);
+    }
+
     /** Closes the game and opens the launcher again. */
     private void exitToLauncher() {
         if (exiting)
@@ -204,7 +320,7 @@ public class GameActivity extends SDLActivity {
         if (controls != null)
             controls.releaseAll();
         TouchControlsView.stopRumble();
-        startActivity(new Intent(this, LauncherActivity.class));
+        startActivity(new Intent(this, BuildConfig.HUB ? HubActivity.class : LauncherActivity.class));
         finish();
         requestExit(0);
     }
@@ -241,8 +357,16 @@ public class GameActivity extends SDLActivity {
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 panelGesture = false;
+                hubMenuGesture = false;
                 break;
             case MotionEvent.ACTION_POINTER_DOWN:
+                if (BuildConfig.HUB && !panelGesture && event.getPointerCount() == HUB_MENU_FINGERS
+                        && event.getEventTime() - event.getDownTime() <= PANEL_TAP_WINDOW_MS) {
+                    // Wait for the tap to end: a fourth finger means the controls panel instead.
+                    hubMenuGesture = true;
+                } else if (event.getPointerCount() > HUB_MENU_FINGERS) {
+                    hubMenuGesture = false;
+                }
                 if (!panelGesture && controls != null && event.getPointerCount() >= PANEL_FINGERS
                         && event.getEventTime() - event.getDownTime() <= PANEL_TAP_WINDOW_MS
                         && (panel == null || !panel.isShowing())) {
@@ -257,6 +381,12 @@ public class GameActivity extends SDLActivity {
                 break;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
+                if (hubMenuGesture && event.getActionMasked() == MotionEvent.ACTION_UP && !panelGesture
+                        && event.getEventTime() - event.getDownTime() <= 700) {
+                    hubMenuGesture = false;
+                    openHubMenu("three-finger tap");
+                }
+                hubMenuGesture = false;
                 if (panelGesture) {
                     panelGesture = false;
                     return true;

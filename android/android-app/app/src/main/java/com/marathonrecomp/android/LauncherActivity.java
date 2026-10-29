@@ -28,7 +28,7 @@ import java.io.File;
  * runs its own installer on first start.
  */
 public class LauncherActivity extends Activity {
-    static final File ROOT = new File(Environment.getExternalStorageDirectory(), "MarathonRecomp");
+    static final File ROOT = Paths.ROOT;
 
     private TextView status;
     private TextView steps;
@@ -129,10 +129,10 @@ public class LauncherActivity extends Activity {
         boolean installed = false;
         int importCount = 0;
         if (access) {
-            new File(ROOT, "import").mkdirs();
-            new File(ROOT, "logs").mkdirs();
-            installed = new File(ROOT, "game/default.xex").isFile();
-            String[] names = new File(ROOT, "import").list();
+            Paths.IMPORT.mkdirs();
+            Paths.LOGS.mkdirs();
+            installed = Paths.gameInstalled();
+            String[] names = Paths.IMPORT.list();
             if (names != null) {
                 for (String name : names) {
                     if (!name.startsWith(".")) importCount++;
@@ -192,7 +192,7 @@ public class LauncherActivity extends Activity {
     private void startGame(String[] args) {
         if (starting)
             return;
-        if (!new File(ROOT, "game/default.xex").isFile()) {
+        if (!Paths.gameInstalled()) {
             launch(args);
             return;
         }
@@ -235,7 +235,7 @@ public class LauncherActivity extends Activity {
                             .setTitle("Mods and patches couldn't be prepared")
                             .setMessage(String.valueOf(e.getMessage()))
                             .setPositiveButton("Start without them", (d, w) -> {
-                                new File(ROOT, "user/cpkredir.ini").delete();
+                                new File(Paths.USER, "cpkredir.ini").delete();
                                 ModManager.XEX_PATCHES.delete();
                                 launch(args);
                             })

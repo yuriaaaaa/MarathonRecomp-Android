@@ -160,7 +160,7 @@ namespace
 void os::logger::Init()
 {
     std::error_code ec;
-    std::filesystem::path directory = std::filesystem::path(MARATHON_ANDROID_ROOT) / "logs";
+    std::filesystem::path directory = os::android::LogPath();
     std::filesystem::create_directories(directory, ec);
 
     time_t now = time(nullptr);

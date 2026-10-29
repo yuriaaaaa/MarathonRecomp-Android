@@ -1,6 +1,9 @@
 #pragma once
 
 #include <mod/mod_loader.h>
+#ifdef __ANDROID__
+#include <os/android/android_paths.h>
+#endif
 
 #define USER_DIRECTORY "MarathonRecomp"
 
@@ -17,7 +20,10 @@ const std::filesystem::path& GetUserPath();
 
 inline std::filesystem::path GetGamePath()
 {
-#ifdef __APPLE__
+#if defined(__ANDROID__)
+    // Android: the launcher may point at another folder's game/ (see os/android/android_paths.h).
+    return os::android::GameParentPath();
+#elif defined(__APPLE__)
     // On macOS, there is the expectation that the app may be installed to
     // /Applications/, and the bundle should not be modified. Thus we need
     // to install game files to the user directory instead of next to the app.

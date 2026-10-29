@@ -102,6 +102,7 @@ if (ANDROID)
         "os/android/android_main.cpp"
         "os/android/touch_controls_android.cpp"
         "os/android/gpu_android.cpp"
+        "os/android/hub_android.cpp"
     )
 elseif (WIN32)
     set(MARATHON_RECOMP_OS_CXX_SOURCES

@@ -43,8 +43,8 @@ final class ModManager {
     private static final File GENERATED = new File(MODS, ".marathon");
     private static final File MERGED = new File(GENERATED, "merged");
     private static final File STATE = new File(MODS, "mods.txt");
-    private static final File GAME = new File(LauncherActivity.ROOT, "game");
-    private static final File CPKREDIR = new File(LauncherActivity.ROOT, "user/cpkredir.ini");
+    private static final File GAME = Paths.game();
+    private static final File CPKREDIR = new File(Paths.USER, "cpkredir.ini");
     /** Data writes into default.xex from patches; the game applies them in memory at startup. */
     static final File XEX_PATCHES = new File(GENERATED, "xex_patches.txt");
     static final File USER_PATCHES = new File(LauncherActivity.ROOT, "patches");
@@ -153,6 +153,19 @@ final class ModManager {
         }
         // New mods go to the bottom of the list, switched off.
         mods.addAll(found.values());
+
+        if (BuildConfig.HUB) {
+            // Soleanna Hub: the hub's town mission is always on and wins over every other mod.
+            for (int i = 0; i < mods.size(); i++) {
+                Mod mod = mods.get(i);
+                if (mod.id.equals(HubMod.FOLDER)) {
+                    mods.remove(i);
+                    mod.enabled = true;
+                    mods.add(0, mod);
+                    break;
+                }
+            }
+        }
     }
 
     void save() throws IOException {

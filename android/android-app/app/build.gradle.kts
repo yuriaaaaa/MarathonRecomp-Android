@@ -18,6 +18,27 @@ android {
         }
     }
 
+    buildFeatures {
+        buildConfig = true
+    }
+
+    // Two apps from one source: Marathon Recompiled itself, and Soleanna Hub (Sonic's town as a
+    // launcher for other Android games), which installs next to it under its own id.
+    flavorDimensions += "app"
+    productFlavors {
+        create("marathon") {
+            dimension = "app"
+            buildConfigField("boolean", "HUB", "false")
+        }
+        create("soleanna") {
+            dimension = "app"
+            applicationId = "io.github.david.soleannahub"
+            versionCode = System.getenv("HUB_VERSION_CODE")?.toIntOrNull() ?: 1
+            versionName = System.getenv("HUB_VERSION_NAME") ?: "0.1"
+            buildConfigField("boolean", "HUB", "true")
+        }
+    }
+
     // Release signing comes only from the environment; no key or password is kept in the
     // repository. Set MARATHON_KEYSTORE (path), MARATHON_STORE_PASSWORD, MARATHON_KEY_ALIAS and
     // MARATHON_KEY_PASSWORD to sign with your own key. Without them the release APK is signed with

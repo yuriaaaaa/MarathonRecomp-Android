@@ -1,8 +1,8 @@
 diff --git a/plume_vulkan.cpp b/plume_vulkan.cpp
-index f1dd503..f985695 100644
+index f1dd503..877700f 100644
 --- a/plume_vulkan.cpp
 +++ b/plume_vulkan.cpp
-@@ -27,6 +27,13 @@
+@@ -27,6 +27,17 @@
  // TODO:
  // - Fix resource pools.
  
@@ -11,12 +11,16 @@ index f1dd503..f985695 100644
 +// driver when one is selected in the launcher, or nullptr for the system driver.
 +extern "C" PFN_vkGetInstanceProcAddr MarathonAndroid_CustomVkGetInstanceProcAddr();
 +extern "C" void MarathonAndroid_CustomDriverFailed(int result);
++// The window SDL currently has for the game, and how many times the app has been in the
++// background. Android takes the window away whenever the app goes to the background (switching
++// apps), so on coming back the swap chain needs a new surface even if the pointer is the same.
++extern "C" ANativeWindow *MarathonAndroid_CurrentNativeWindow(uint32_t *generation);
 +#endif
 +
  namespace plume {
      // Backend constants.
  
-@@ -2205,7 +2212,11 @@ namespace plume {
+@@ -2205,7 +2216,11 @@ namespace plume {
          }
  
          if (compatibleSurfaceFormats.empty()) {
@@ -29,7 +33,85 @@ index f1dd503..f985695 100644
              return;
          }
  
-@@ -4464,7 +4475,19 @@ namespace plume {
+@@ -2309,7 +2324,53 @@ namespace plume {
+         }
+     }
+ 
++#if defined(__ANDROID__)
++    // Android: after the app was in the background the old ANativeWindow is gone, and any swap
++    // chain made for its surface fails with VK_ERROR_NATIVE_WINDOW_IN_USE_KHR. Make a new surface.
++    bool VulkanSwapChain::recreateSurfaceIfWindowChanged() {
++        uint32_t generation = 0;
++        ANativeWindow *current = MarathonAndroid_CurrentNativeWindow(&generation);
++        if (current == nullptr) {
++            return false;
++        }
++
++        if ((current == desc.renderWindow) && (generation == windowGeneration)) {
++            return true;
++        }
++
++        VulkanInterface *renderInterface = commandQueue->device->renderInterface;
++        releaseImageViews();
++        releaseSwapChain();
++        if (surface != VK_NULL_HANDLE) {
++            vkDestroySurfaceKHR(renderInterface->instance, surface, nullptr);
++            surface = VK_NULL_HANDLE;
++        }
++
++        desc.renderWindow = current;
++        windowGeneration = generation;
++        VkAndroidSurfaceCreateInfoKHR surfaceCreateInfo = {};
++        surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
++        surfaceCreateInfo.window = current;
++        VkResult res = vkCreateAndroidSurfaceKHR(renderInterface->instance, &surfaceCreateInfo, nullptr, &surface);
++        if (res != VK_SUCCESS) {
++            fprintf(stderr, "vkCreateAndroidSurfaceKHR failed with error code 0x%X after the window changed.\n", res);
++            surface = VK_NULL_HANDLE;
++            return false;
++        }
++
++        VkBool32 presentSupported = false;
++        vkGetPhysicalDeviceSurfaceSupportKHR(commandQueue->device->physicalDevice, commandQueue->familyIndex, surface, &presentSupported);
++        fprintf(stderr, "Swap chain: new Android window %p, surface remade (present %s).\n", (void *)current, presentSupported ? "supported" : "NOT supported");
++        return true;
++    }
++#endif
++
+     bool VulkanSwapChain::resize() {
++#if defined(__ANDROID__)
++        if (!recreateSurfaceIfWindowChanged()) {
++            return false;
++        }
++#endif
+         getWindowSize(width, height);
+ 
+         // Don't recreate the swap chain at all if the window doesn't have a valid size.
+@@ -2401,6 +2462,12 @@ namespace plume {
+     }
+ 
+     bool VulkanSwapChain::needsResize() const {
++#if defined(__ANDROID__)
++        uint32_t generation = 0;
++        if ((MarathonAndroid_CurrentNativeWindow(&generation) != desc.renderWindow) || (generation != windowGeneration)) {
++            return true;
++        }
++#endif
+         uint32_t windowWidth, windowHeight;
+         getWindowSize(windowWidth, windowHeight);
+         return (vk == VK_NULL_HANDLE) || (windowWidth != width) || (windowHeight != height) || (requiredPresentMode != createdPresentMode);
+@@ -2466,6 +2533,10 @@ namespace plume {
+ #   elif defined(PLUME_SDL_VULKAN_ENABLED)
+         SDL_GetWindowSizeInPixels(desc.renderWindow, (int *)(&dstWidth), (int *)(&dstHeight));
+ #   elif defined(__ANDROID__)
++        if (desc.renderWindow == nullptr) {
++            dstWidth = dstHeight = 0;
++            return;
++        }
+         dstWidth = ANativeWindow_getWidth(desc.renderWindow);
+         dstHeight = ANativeWindow_getHeight(desc.renderWindow);
+ #   elif defined(__linux__)
+@@ -4464,7 +4535,19 @@ namespace plume {
  #else
      VulkanInterface::VulkanInterface() {
  #endif
@@ -49,7 +131,7 @@ index f1dd503..f985695 100644
          if (res != VK_SUCCESS) {
              fprintf(stderr, "volkInitialize failed with error code 0x%X.\n", res);
              return;
-@@ -4574,6 +4597,16 @@ namespace plume {
+@@ -4574,6 +4657,16 @@ namespace plume {
  #   endif
          
          res = vkCreateInstance(&createInfo, nullptr, &instance);
@@ -66,3 +148,18 @@ index f1dd503..f985695 100644
          if (res != VK_SUCCESS) {
              fprintf(stderr, "vkCreateInstance failed with error code 0x%X.\n", res);
              return;
+diff --git a/plume_vulkan.h b/plume_vulkan.h
+index 0a1edbe..55ef5b8 100644
+--- a/plume_vulkan.h
++++ b/plume_vulkan.h
+@@ -261,6 +261,10 @@ namespace plume {
+         void getWindowSize(uint32_t &dstWidth, uint32_t &dstHeight) const;
+         void releaseSwapChain();
+         void releaseImageViews();
++#if defined(__ANDROID__)
++        uint32_t windowGeneration = 0;
++        bool recreateSurfaceIfWindowChanged();
++#endif
+     };
+ 
+     struct VulkanFramebuffer : RenderFramebuffer {

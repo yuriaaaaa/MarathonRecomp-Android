@@ -19,6 +19,9 @@
 #   MARATHON_ANDROID_WORK             build directory (default: android/build)
 #   JOBS                              parallel jobs (default: nproc)
 #   MARATHON_VERSION_CODE / _NAME     APK version (default: 13 / 0.6.0)
+#   MARATHON_APP                      marathon (default) or soleanna: Soleanna Hub, Sonic's town as a
+#                                     launcher for other Android games (android/soleanna)
+#   HUB_VERSION_CODE / _NAME          Soleanna Hub's version (default: 1 / 0.1)
 #   MARATHON_KEYSTORE, MARATHON_STORE_PASSWORD, MARATHON_KEY_ALIAS, MARATHON_KEY_PASSWORD
 #                                     optional release signing; otherwise the debug key is used
 
@@ -250,18 +253,29 @@ fetch smm "$SMM_URL" "$SMM_COMMIT"
 cp "$WORK/src/smm/Sonic-06-Mod-Manager/res/Applications/unlub.jar" "$APP/app/libs/unlub.jar"
 echo "$UNLUB_SHA256  $APP/app/libs/unlub.jar" | sha256sum -c --quiet - || die "unlub.jar checksum mismatch"
 
+# --- Soleanna Hub's town mission (our own Lua, no game files) ------------------------------------
+log "Soleanna Hub mod"
+rm -rf "$APP/app/src/soleanna/assets/hubmod"
+python3 "$HERE/soleanna/make_hub_mod.py" "$APP/app/src/soleanna/assets/hubmod"
+rm -f "$APP/app/src/soleanna/assets/hubmod/hub_mission.lua"
+
 # --- APK -------------------------------------------------------------------------------------------
 log "APK"
+FLAVOR="${MARATHON_APP:-marathon}"
+case "$FLAVOR" in marathon|soleanna) ;; *) die "MARATHON_APP must be marathon or soleanna" ;; esac
+FLAVOR_TASK="$(printf '%s' "${FLAVOR:0:1}" | tr a-z A-Z)${FLAVOR:1}"
 printf 'sdk.dir=%s\n' "$SDK" > "$APP/local.properties"
 export MARATHON_VERSION_CODE="${MARATHON_VERSION_CODE:-13}"
 export MARATHON_VERSION_NAME="${MARATHON_VERSION_NAME:-0.6.0}"
-(cd "$APP" && ./gradlew --no-daemon :app:assembleRelease)
+(cd "$APP" && ./gradlew --no-daemon ":app:assemble${FLAVOR_TASK}Release")
 mkdir -p "$WORK/out"
+NAME=MarathonRecomp-android-arm64
+[ "$FLAVOR" = soleanna ] && NAME=SoleannaHub-android-arm64
 if [ "$SKIP_GAME" = 0 ]; then
-    OUT="$WORK/out/MarathonRecomp-android-arm64.apk"
+    OUT="$WORK/out/$NAME.apk"
 else
-    OUT="$WORK/out/MarathonRecomp-android-arm64-launcher-only.apk"
+    OUT="$WORK/out/$NAME-launcher-only.apk"
 fi
-cp "$APP/app/build/outputs/apk/release/app-release.apk" "$OUT"
+cp "$APP/app/build/outputs/apk/$FLAVOR/release/app-$FLAVOR-release.apk" "$OUT"
 log "Done: $OUT"
 [ "$SKIP_GAME" = 0 ] || echo "This APK has no game library (built with --skip-game) and can't start the game."

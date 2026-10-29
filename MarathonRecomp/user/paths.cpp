@@ -16,7 +16,7 @@ std::filesystem::path BuildUserPath()
 {
 #ifdef __ANDROID__
     // Android port: config, saves and achievements next to the game files.
-    return std::filesystem::path(MARATHON_ANDROID_ROOT) / "user";
+    return os::android::UserPath();
 #endif
 
     if (CheckPortable())
