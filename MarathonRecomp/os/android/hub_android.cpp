@@ -9,6 +9,7 @@
 // the hub comes back from another app (see recreateSurfaceIfWindowChanged in plume-android.patch).
 
 #include <api/Marathon.h>
+#include <api/lua50/lua.h>
 #include <os/logger.h>
 #include <ui/game_window.h>
 
@@ -43,39 +44,15 @@ namespace
             env->ExceptionClear();
         env->DeleteLocalRef(jkey);
     }
-
-    // Lua 5.0 (32-bit guest): lua_State { GCObject* next; lu_byte tt, marked; StkId top; StkId base; ... },
-    // TObject { int tt; Value value; } (8 bytes), TString { next, tt, marked, reserved; hash; len; chars }.
-    constexpr uint32_t kLuaStateTop = 0x08;
-    constexpr uint32_t kLuaStateBase = 0x0C;
-    constexpr uint32_t kTObjectSize = 8;
-    constexpr uint32_t kLuaTString = 4;
-    constexpr uint32_t kTStringLen = 0x0C;
-    constexpr uint32_t kTStringChars = 0x10;
-
-    // Argument idx (1-based) of a Lua C function as a string, or nullptr if it isn't one.
-    const char* LuaStringArg(uint8_t* base, uint32_t L, int idx)
-    {
-        uint32_t top = PPC_LOAD_U32(L + kLuaStateTop);
-        uint32_t stackBase = PPC_LOAD_U32(L + kLuaStateBase);
-        uint32_t slot = stackBase + (idx - 1) * kTObjectSize;
-        if (slot >= top)
-            return nullptr;
-        if (PPC_LOAD_U32(slot) != kLuaTString)
-            return nullptr;
-        uint32_t ts = PPC_LOAD_U32(slot + 4);
-        if (PPC_LOAD_U32(ts + kTStringLen) > 256)
-            return nullptr;
-        return reinterpret_cast<const char*>(base + ts + kTStringChars);
-    }
 }
 
-// Mission script function ChangeArea(mission, area) (Sonicteam::Mission, registered in default.xex's
-// mission luaL_reg table next to CallMission, SetNextMission, MissionClear...).
-PPC_FUNC_IMPL(__imp__HUB_CHANGE_AREA);
-PPC_FUNC(HUB_CHANGE_AREA)
+// Mission script function ChangeArea(mission, area): the mission luaL_reg table at 0x8203B8F0
+// (next to CallMission, SetNextMission, MissionClear) points at sub_825194F0.
+PPC_FUNC_IMPL(__imp__sub_825194F0);
+PPC_FUNC(sub_825194F0)
 {
-    const char* area = LuaStringArg(base, ctx.r3.u32, 2);
+    auto L = reinterpret_cast<lua50::lua_State*>(base + ctx.r3.u32);
+    const char* area = lua50::lua_tostring(L, 2);
     if (area && std::strncmp(area, "hub:", 4) == 0)
     {
         OpenSlot(area + 4);
@@ -83,7 +60,7 @@ PPC_FUNC(HUB_CHANGE_AREA)
         return;
     }
 
-    __imp__HUB_CHANGE_AREA(ctx, base);
+    __imp__sub_825194F0(ctx, base);
 }
 
 extern "C" ANativeWindow* MarathonAndroid_CurrentNativeWindow(uint32_t* generation)
